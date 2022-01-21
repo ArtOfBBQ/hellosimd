@@ -10,6 +10,8 @@ Let's get our feet wet with using simd.
 #include "assert.h"
 #include "pthread.h"
 
+#define FASTEST_SOLUTION_ONLY
+
 /*
 We need to pass multiple arguments to the entry point when we
 start a thread, but the arguments are expected to be of type
@@ -27,6 +29,7 @@ typedef struct handle_chunk_args {
     uint64_t last_i;
 } handle_chunk_args;
 
+#ifndef FASTEST_SOLUTION_ONLY
 /* Use this to have a thread handle a chunk without simd */
 static void * handle_chunk(void * arguments)
 {
@@ -46,6 +49,7 @@ static void * handle_chunk(void * arguments)
     
     return NULL;
 }
+#endif
 
 /* Use this to have a thread handle a chunk of data with simd */
 static void * handle_chunk_with_simd(void * arguments)
@@ -98,20 +102,25 @@ static long to_microsecs(struct timespec input) {
 int main()
 {
     struct timespec start, end;
-    
+   
+    #ifndef FASTEST_SOLUTION_ONLY 
     long vanilla_time_used;
     long simd_time_used;
     long vanilla_threaded_time_used;
+    #endif
     long simd_threaded_time_used;
     
     printf("Hello, simd instructions!\n");
-    
     /*
     Step 1: prepare 2 big vectors with whatever values
     to add, then multiply.
     */
     srand((uint32_t)time(NULL));
-    uint64_t vectors_size = 12500000 * ((rand() % 10) + 5);
+    uint64_t vectors_size = 50000000; //12500000 * ((rand() % 10) + 5);
+    uint32_t threads_size = 4;
+    uint64_t chunk_size =
+        (vectors_size / threads_size) + 1;
+    chunk_size -= (chunk_size % 8);
     printf(
         "Will add, then mull 2 vecs of %llu floats each...\n",
         vectors_size);
@@ -120,12 +129,14 @@ int main()
         malloc(sizeof(float) * vectors_size);
     float * vector_2 =
         malloc(sizeof(float) * vectors_size);
+    #ifndef FASTEST_SOLUTION_ONLY
     float * results =
         malloc(sizeof(float) * vectors_size);
     float * simd_results =
         malloc(sizeof(float) * vectors_size);
     float * vanilla_threaded_results =
         malloc(sizeof(float) * vectors_size);
+    #endif
     float * simd_threaded_results =
         malloc(sizeof(float) * vectors_size);
     
@@ -135,6 +146,7 @@ int main()
         vector_2[i] = i % 4 * 0.54f;
     }
     
+    #ifndef FASTEST_SOLUTION_ONLY
     // Step 2: calculate vector addition and multiplication
     // in the simplest possible way
     printf("Computing with 1 thread - no simd...\n");
@@ -165,7 +177,6 @@ int main()
     
     // step 4: calculate the same vector addition with multiple
     // cpu threads (no simd)
-    uint32_t threads_size = 4;
     printf(
         "Computing with %u threads - no simd...\n",
         threads_size);
@@ -173,9 +184,6 @@ int main()
         malloc(sizeof(pthread_t) * threads_size);
     handle_chunk_args * thread_args =
         malloc(sizeof(handle_chunk_args) * 4);
-    uint64_t chunk_size =
-        (vectors_size / threads_size) + 1;
-    chunk_size -= (chunk_size % 8);
     
     clock_gettime(CLOCK_MONOTONIC, &start);
     for (
@@ -218,6 +226,7 @@ int main()
     clock_gettime(CLOCK_MONOTONIC, &end);
     vanilla_threaded_time_used =
         to_microsecs(time_diff(start, end));
+    #endif
     
     // step 5: calculate the same vector addition with multiple
     // cpu threads, with simd on each thread
@@ -274,6 +283,7 @@ int main()
         to_microsecs(time_diff(start, end));
     
     // report results 
+    #ifndef FASTEST_SOLUTION_ONLY
     printf(
         "%ld microseconds taken by 'naive' code\n",
         vanilla_time_used);
@@ -283,10 +293,12 @@ int main()
     printf(
         "%ld microseconds taken with 4 cpu threads\n",
         vanilla_threaded_time_used);
+    #endif
     printf(
         "%ld microseconds taken by 4 simd threads\n",
         simd_threaded_time_used);
-    
+   
+    #ifndef FASTEST_SOLUTION_ONLY 
     // step 5: spot check all calculation results equal
     for (
         uint64_t i = 0;
@@ -307,10 +319,11 @@ int main()
              (results[i] - simd_threaded_results[i]) > -0.05f);
     }
 
-    free(simd_threaded_results);
     free(results);
     free(simd_results);
     free(vanilla_threaded_results);
+    #endif
+    free(simd_threaded_results);
     
     return 0;
 }
