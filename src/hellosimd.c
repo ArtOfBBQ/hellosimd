@@ -10,6 +10,15 @@ Let's get our feet wet with using simd.
 #include "assert.h"
 #include "pthread.h"
 
+/*
+We need to pass multiple arguments to the entry point when we
+start a thread, but the arguments are expected to be of type
+"void *".
+
+By storing our arguments in this struct we can pass them. It's
+convoluted but no different from passing function arguments
+in single-threaded cocde.
+*/
 typedef struct handle_chunk_args {
     float * vector_1;
     float * vector_2;
@@ -18,11 +27,13 @@ typedef struct handle_chunk_args {
     uint64_t last_i;
 } handle_chunk_args;
 
+/* Use this to have a thread handle a chunk without simd */
 static void * handle_chunk(void * arguments)
 {
+    // cast the void * back to a "handle_chunk_args" struct
     handle_chunk_args * args =
         (handle_chunk_args *)arguments;
-
+    
     for (
         uint64_t i = args->starting_i;
         i < args->last_i;
@@ -36,6 +47,33 @@ static void * handle_chunk(void * arguments)
     return NULL;
 }
 
+/* Use this to have a thread handle a chunk of data with simd */
+static void * handle_chunk_with_simd(void * arguments)
+{
+    __m256 v1;
+    __m256 v2;
+    
+    // cast the void * back to a "handle_chunk_args" struct
+    handle_chunk_args * args =
+        (handle_chunk_args *)arguments;
+    
+    for (
+        uint64_t i = args->starting_i;
+        i < (args->last_i - 9);
+        i += 8)
+    {
+        v1 = _mm256_load_ps( (args->vector_1 + i) );
+        v2 = _mm256_load_ps( (args->vector_2 + i) );
+        v1 = _mm256_add_ps(v1, v2);
+        _mm256_store_ps(
+            args->results + i,
+            _mm256_mul_ps(v1, v2));
+    }
+    
+    return NULL;
+}
+
+/* get time elapsed between start & end */
 static struct timespec time_diff(
     struct timespec start,
     struct timespec end)
@@ -64,6 +102,7 @@ int main()
     long vanilla_time_used;
     long simd_time_used;
     long vanilla_threaded_time_used;
+    long simd_threaded_time_used;
     
     printf("Hello, simd instructions!\n");
     
@@ -71,11 +110,12 @@ int main()
     Step 1: prepare 2 big vectors with whatever values
     to add, then multiply.
     */
-    srand(0);
-    uint64_t vectors_size = 12500000 * ((rand() % 10) + 1);
+    srand((uint32_t)time(NULL));
+    uint64_t vectors_size = 12500000 * ((rand() % 10) + 5);
     printf(
-        "Will add, then multiply 2 vectors of %llu floats each...\n",
+        "Will add, then mull 2 vecs of %llu floats each...\n",
         vectors_size);
+    printf("allocate memory...\n");
     float * vector_1 =
         malloc(sizeof(float) * vectors_size);
     float * vector_2 =
@@ -86,7 +126,10 @@ int main()
         malloc(sizeof(float) * vectors_size);
     float * vanilla_threaded_results =
         malloc(sizeof(float) * vectors_size);
+    float * simd_threaded_results =
+        malloc(sizeof(float) * vectors_size);
     
+    printf("fill in input vectors with random values...\n");
     for (uint64_t i = 0; i < vectors_size; i++) {
         vector_1[i] = rand();
         vector_2[i] = i % 4 * 0.54f;
@@ -94,6 +137,7 @@ int main()
     
     // Step 2: calculate vector addition and multiplication
     // in the simplest possible way
+    printf("Computing with 1 thread - no simd...\n");
     clock_gettime(CLOCK_MONOTONIC, &start);
     for (uint64_t i = 0; i < vectors_size; i++) {
         results[i] = (vector_1[i] + vector_2[i]) * vector_2[i];
@@ -102,6 +146,7 @@ int main()
     vanilla_time_used = to_microsecs(time_diff(start, end)); 
     
     // Step 3: calculate the exact same vector addition with simd
+    printf("Computing with 1 thread using simd...\n");
     __m256 v1;
     __m256 v2;
     clock_gettime(
@@ -119,14 +164,18 @@ int main()
     simd_time_used = to_microsecs(time_diff(start, end)); 
     
     // step 4: calculate the same vector addition with multiple
-    // cpu threads
+    // cpu threads (no simd)
     uint32_t threads_size = 4;
+    printf(
+        "Computing with %u threads - no simd...\n",
+        threads_size);
     pthread_t * threads =
         malloc(sizeof(pthread_t) * threads_size);
     handle_chunk_args * thread_args =
         malloc(sizeof(handle_chunk_args) * 4);
     uint64_t chunk_size =
         (vectors_size / threads_size) + 1;
+    chunk_size -= (chunk_size % 8);
     
     clock_gettime(CLOCK_MONOTONIC, &start);
     for (
@@ -144,11 +193,14 @@ int main()
         
         void * this_thread_args = (void *)&thread_args[i];
         
-        pthread_create(
+        int result = pthread_create(
             /* pthread_t * thread    : */ &(threads[i]),
             /* pthread_attr_t * attr : */ NULL,
             /* void *(*start_routine)(void *) : */ &handle_chunk,
             /* void * arg : */ this_thread_args);
+        if (result) {
+            printf("ERROR during creation of thread: %u\n", i);
+        }
     }
     
     for (
@@ -156,27 +208,90 @@ int main()
         i < threads_size;
         i += 1)
     {
-        pthread_join(threads[i], NULL);
+        int result = pthread_join(threads[i], NULL);
+        if (result) {
+            printf(
+                "ERROR while joining (non-simd) thread: %u\n",
+                i);
+        }
     }
     clock_gettime(CLOCK_MONOTONIC, &end);
     vanilla_threaded_time_used =
         to_microsecs(time_diff(start, end));
     
+    // step 5: calculate the same vector addition with multiple
+    // cpu threads, with simd on each thread
     printf(
-        "'naive' code - microseconds: %ld\n",
+        "Computing with %u threads and using simd...\n",
+        threads_size);
+    pthread_t * simd_threads =
+        malloc(sizeof(pthread_t) * threads_size);
+    handle_chunk_args * simd_thread_args =
+        malloc(sizeof(handle_chunk_args) * 4);
+    
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (
+        uint32_t i = 0;
+        i < threads_size;
+        i += 1)
+    {
+        simd_thread_args[i].vector_1 = vector_1;
+        simd_thread_args[i].vector_2 = vector_2;
+        simd_thread_args[i].results = simd_threaded_results;
+        simd_thread_args[i].starting_i = i * chunk_size;
+        simd_thread_args[i].last_i =
+            (i + 1) * chunk_size > vectors_size ?
+                    vectors_size : (i + 1) * chunk_size;
+        
+        void * this_thread_args = (void *)&simd_thread_args[i];
+        
+        int result = pthread_create(
+            /* pthread_t * thread             : */
+                &(simd_threads[i]),
+            /* pthread_attr_t * attr          : */
+                NULL,
+            /* void *(*start_routine)(void *) : */
+                &handle_chunk_with_simd,
+            /* void * arg : */
+                this_thread_args);
+        if (result) {
+            printf("ERROR while creating simd thread: %u\n", i);
+        }
+    }
+    
+    for (
+        uint32_t i = 0;
+        i < threads_size;
+        i += 1)
+    {
+        int result = pthread_join(simd_threads[i], NULL);
+        if (result) {
+            printf("ERROR while joining simd thread: %u\n", i);
+        }
+    }
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    simd_threaded_time_used =
+        to_microsecs(time_diff(start, end));
+    
+    // report results 
+    printf(
+        "%ld microseconds taken by 'naive' code\n",
         vanilla_time_used);
     printf(
-        "using simd - microseconds: %ld\n",
+        "%ld microseconds taken using simd\n",
         simd_time_used);
     printf(
-        "4 cpu threads - microseconds: %ld\n",
+        "%ld microseconds taken with 4 cpu threads\n",
         vanilla_threaded_time_used);
+    printf(
+        "%ld microseconds taken by 4 simd threads\n",
+        simd_threaded_time_used);
     
-    // step 5: prove all calculation results are equal
+    // step 5: spot check all calculation results equal
     for (
         uint64_t i = 0;
-        i < vectors_size;
-        i++)
+        i < (vectors_size - 200);
+        i += 200)
     {
          assert(
              (results[i] - simd_results[i]) < 0.05f);
@@ -186,7 +301,16 @@ int main()
              (results[i] - vanilla_threaded_results[i]) < 0.05f);
          assert(
              (results[i] - vanilla_threaded_results[i]) > -0.05f);
+         assert(
+             (results[i] - simd_threaded_results[i]) > -0.05f);
+         assert(
+             (results[i] - simd_threaded_results[i]) > -0.05f);
     }
+
+    free(simd_threaded_results);
+    free(results);
+    free(simd_results);
+    free(vanilla_threaded_results);
     
     return 0;
 }
