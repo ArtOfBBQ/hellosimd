@@ -2,6 +2,8 @@
 Let's get our feet wet with using simd.
 */
 
+#define _POSIX_C_SOURCE 199309L // allows clock_gettime() on linux
+
 #include "inttypes.h"
 #include "stdlib.h"
 #include "immintrin.h" // intel 'intrinsics' nescessary for simd
@@ -139,7 +141,7 @@ int main()
         (vectors_size / threads_size) + 1;
     chunk_size -= (chunk_size % 8);
     printf(
-        "Will add, then mull 2 vecs of %llu floats each...\n",
+        "Will add, then mull 2 vecs of %lu floats each...\n",
         vectors_size);
     printf("allocate memory...\n");
     float * vector_1 =
