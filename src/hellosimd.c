@@ -10,8 +10,6 @@ Let's get our feet wet with using simd.
 #include "assert.h"
 #include "pthread.h"
 
-#define FASTEST_SOLUTION_ONLY
-
 /*
 We need to pass multiple arguments to the entry point when we
 start a thread, but the arguments are expected to be of type
@@ -29,7 +27,6 @@ typedef struct handle_chunk_args {
     uint64_t last_i;
 } handle_chunk_args;
 
-#ifndef FASTEST_SOLUTION_ONLY
 /* Use this to have a thread handle a chunk without simd */
 static void * handle_chunk(void * arguments)
 {
@@ -49,9 +46,9 @@ static void * handle_chunk(void * arguments)
     
     return NULL;
 }
-#endif
 
 /* Use this to have a thread handle a chunk of data with simd */
+#ifdef __AVX__
 static void * handle_chunk_with_simd(void * arguments)
 {
     __m256 v1;
@@ -76,6 +73,7 @@ static void * handle_chunk_with_simd(void * arguments)
     
     return NULL;
 }
+#endif
 
 /* get time elapsed between start & end */
 static struct timespec time_diff(
@@ -101,22 +99,41 @@ static long to_microsecs(struct timespec input) {
 
 int main()
 {
+    printf("Hello, simd instructions!\n");
+    
+    printf("intel AVX intrinsics availibility:\n");
+    #ifdef __AVX__
+    printf("__AVX__\n");
+    #endif
+    #ifdef __AVX2__
+    printf("__AVX2__\n");
+    #endif
+    #ifdef __AVX512CD__
+    printf("__AVX512CD__\n");
+    #endif
+    #ifdef __AVX512ER__
+    printf("__AVX512ER__\n");
+    #endif
+    #ifdef __AVX512F__
+    printf("__AVX512F__\n");
+    #endif
+    #ifdef __AVX512PF__
+    printf("__AVX512PF__\n");
+    #endif
+    
     struct timespec start, end;
    
-    #ifndef FASTEST_SOLUTION_ONLY 
     long vanilla_time_used;
-    long simd_time_used;
+    long simd_time_used = 0;
     long vanilla_threaded_time_used;
-    #endif
-    long simd_threaded_time_used;
+    long simd_threaded_time_used = 0;
     
-    printf("Hello, simd instructions!\n");
     /*
     Step 1: prepare 2 big vectors with whatever values
     to add, then multiply.
     */
     srand((uint32_t)time(NULL));
-    uint64_t vectors_size = 50000000; //12500000 * ((rand() % 10) + 5);
+    uint64_t vectors_size = 1 << 25;
     uint32_t threads_size = 4;
     uint64_t chunk_size =
         (vectors_size / threads_size) + 1;
@@ -129,14 +146,12 @@ int main()
         malloc(sizeof(float) * vectors_size);
     float * vector_2 =
         malloc(sizeof(float) * vectors_size);
-    #ifndef FASTEST_SOLUTION_ONLY
     float * results =
         malloc(sizeof(float) * vectors_size);
     float * simd_results =
         malloc(sizeof(float) * vectors_size);
     float * vanilla_threaded_results =
         malloc(sizeof(float) * vectors_size);
-    #endif
     float * simd_threaded_results =
         malloc(sizeof(float) * vectors_size);
     
@@ -146,7 +161,6 @@ int main()
         vector_2[i] = i % 4 * 0.54f;
     }
     
-    #ifndef FASTEST_SOLUTION_ONLY
     // Step 2: calculate vector addition and multiplication
     // in the simplest possible way
     printf("Computing with 1 thread - no simd...\n");
@@ -159,6 +173,7 @@ int main()
     
     // Step 3: calculate the exact same vector addition with simd
     printf("Computing with 1 thread using simd...\n");
+    #ifdef __AVX__
     __m256 v1;
     __m256 v2;
     clock_gettime(
@@ -174,6 +189,7 @@ int main()
     }
     clock_gettime(CLOCK_MONOTONIC, &end);
     simd_time_used = to_microsecs(time_diff(start, end)); 
+    #endif
     
     // step 4: calculate the same vector addition with multiple
     // cpu threads (no simd)
@@ -226,10 +242,10 @@ int main()
     clock_gettime(CLOCK_MONOTONIC, &end);
     vanilla_threaded_time_used =
         to_microsecs(time_diff(start, end));
-    #endif
     
     // step 5: calculate the same vector addition with multiple
     // cpu threads, with simd on each thread
+    #ifdef __AVX__
     printf(
         "Computing with %u threads and using simd...\n",
         threads_size);
@@ -281,24 +297,32 @@ int main()
     clock_gettime(CLOCK_MONOTONIC, &end);
     simd_threaded_time_used =
         to_microsecs(time_diff(start, end));
+    #endif
     
     // report results 
-    #ifndef FASTEST_SOLUTION_ONLY
     printf(
         "%ld microseconds taken by 'naive' code\n",
         vanilla_time_used);
-    printf(
-        "%ld microseconds taken using simd\n",
-        simd_time_used);
+    if (simd_time_used == 0) {
+        printf(
+            "simd test skipped - no AVX on this machine\n");
+    } else {
+        printf(
+            "%ld microseconds taken using simd\n",
+            simd_time_used);
+    }
     printf(
         "%ld microseconds taken with 4 cpu threads\n",
         vanilla_threaded_time_used);
-    #endif
-    printf(
-        "%ld microseconds taken by 4 simd threads\n",
-        simd_threaded_time_used);
-   
-    #ifndef FASTEST_SOLUTION_ONLY 
+    if (simd_threaded_time_used == 0) {
+        printf(
+            "threaded simd test skipped - no AVX on device\n");
+    } else {
+        printf(
+            "%ld microseconds taken by 4 simd threads\n",
+            simd_threaded_time_used);
+    }
+    
     // step 5: spot check all calculation results equal
     for (
         uint64_t i = 0;
@@ -322,7 +346,6 @@ int main()
     free(results);
     free(simd_results);
     free(vanilla_threaded_results);
-    #endif
     free(simd_threaded_results);
     
     return 0;
