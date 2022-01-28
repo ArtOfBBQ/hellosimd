@@ -145,17 +145,17 @@ int main()
         vectors_size);
     printf("allocate memory...\n");
     float * vector_1 =
-        malloc(sizeof(float) * vectors_size);
+        _mm_malloc(sizeof(float) * vectors_size, 32);
     float * vector_2 =
-        malloc(sizeof(float) * vectors_size);
+        _mm_malloc(sizeof(float) * vectors_size, 32);
     float * results =
-        malloc(sizeof(float) * vectors_size);
+        _mm_malloc(sizeof(float) * vectors_size, 32);
     float * simd_results =
-        malloc(sizeof(float) * vectors_size);
+        _mm_malloc(sizeof(float) * vectors_size, 32);
     float * vanilla_threaded_results =
-        malloc(sizeof(float) * vectors_size);
+        _mm_malloc(sizeof(float) * vectors_size, 32);
     float * simd_threaded_results =
-        malloc(sizeof(float) * vectors_size);
+        _mm_malloc(sizeof(float) * vectors_size, 32);
     
     printf("fill in input vectors with random values...\n");
     for (uint64_t i = 0; i < vectors_size; i++) {
@@ -181,9 +181,10 @@ int main()
     clock_gettime(
         CLOCK_MONOTONIC,
         &start);
+    assert(vectors_size % 8 == 0);
     for (uint64_t i = 0; i < vectors_size; i += 8) {
-        v1 = _mm256_load_ps( (vector_1 + i) );
-        v2 = _mm256_load_ps( (vector_2 + i) );
+        v1 = _mm256_load_ps(&(vector_1[i]) );
+        v2 = _mm256_load_ps( &(vector_2[i]) );
         v1 = _mm256_add_ps(v1, v2);
         _mm256_store_ps(
             simd_results + i,
